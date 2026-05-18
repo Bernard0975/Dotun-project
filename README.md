@@ -10,11 +10,38 @@ View your app in AI Studio: https://ai.studio/apps/368c65a0-9438-4000-a421-b3923
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Create a `.env` file and set the Supabase environment variables:
+   ```env
+   VITE_SUPABASE_URL="https://your-project-ref.supabase.co"
+   VITE_SUPABASE_ANON_KEY="your_public_anon_key"
+   ```
 3. Run the app:
    `npm run dev`
+
+## Supabase Setup
+
+This app now stores data in Supabase instead of SQLite.
+
+1. Create a new Supabase project.
+2. Go to the SQL editor and run `supabase-schema.sql`.
+3. In Supabase settings, copy:
+   - `API URL` → `VITE_SUPABASE_URL`
+   - `anon key` → `VITE_SUPABASE_ANON_KEY`
+4. Make sure email/password auth is enabled.
+
+## Deployment
+
+This project is a static Vite frontend and can be hosted on Vercel, Netlify, or any static hosting service.
+
+1. Push the repository to GitHub.
+2. Connect the repo to Vercel or Netlify.
+3. Set the same environment variables in the host:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+4. Build command:
+   `npm run build`
+5. Publish the `dist/` folder.

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 import { 
   Calendar, 
   MapPin, 
@@ -24,7 +25,7 @@ import { motion, AnimatePresence } from 'motion/react';
 type Role = 'admin' | 'lecturer' | 'student';
 
 interface UserInfo {
-  id: number;
+  id: string;
   username: string;
   role: Role;
 }
@@ -37,7 +38,7 @@ interface Resource {
 
 interface Booking {
   id: number;
-  user_id: number;
+  user_id: string;
   username?: string;
   resource_id: number;
   resource_name?: string;
@@ -50,33 +51,23 @@ interface Booking {
 
 interface Notification {
   id: number;
-  user_id: number;
+  user_id: string;
   title: string;
   message: string;
   type: string;
-  is_read: number;
+  is_read: boolean;
   created_at: string;
 }
 
-// --- API Helpers ---
+const fetchProfile = async (userId: string) => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, username, role')
+    .eq('id', userId)
+    .single();
 
-const API_BASE = '/api';
-
-const fetchWithAuth = async (url: string, options: any = {}) => {
-  const token = localStorage.getItem('dept_booking_token');
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    ...options.headers,
-  };
-  const response = await fetch(`${API_BASE}${url}`, { ...options, headers });
-  if (response.status === 401 || response.status === 403) {
-    if (localStorage.getItem('dept_booking_token')) {
-        localStorage.removeItem('dept_booking_token');
-        window.location.reload();
-    }
-  }
-  return response.json();
+  if (error || !data) return null;
+  return data as { id: string; username: string; role: Role };
 };
 
 // --- Main App Component ---
@@ -98,49 +89,75 @@ export default function App() {
     checkAuth();
   }, []);
 
+  useEffect(() => {
+    if (user) {
+      fetchData();
+    }
+  }, [user]);
+
   const checkAuth = async () => {
-    const token = localStorage.getItem('dept_booking_token');
-    if (token) {
-      try {
-        const data = await fetchWithAuth('/auth/me');
-        if (data && data.id) setUser(data);
-      } catch (e) {
-        localStorage.removeItem('dept_booking_token');
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionUser = sessionData.session?.user;
+
+    if (sessionUser) {
+      const profile = await fetchProfile(sessionUser.id);
+      if (profile) {
+        setUser({ id: profile.id, username: profile.username, role: profile.role });
       }
     }
+
     setLoading(false);
   };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    const endpoint = authView === 'login' ? '/auth/login' : '/auth/register';
-    const body = authView === 'login' 
-      ? { username, password } 
-      : { username, password, email, role };
 
     try {
-      const data = await fetchWithAuth(endpoint, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
+      if (authView === 'login') {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-      if (data.token) {
-        localStorage.setItem('dept_booking_token', data.token);
-        setUser(data.user);
-      } else if (data.message && authView === 'register') {
+        if (error) throw error;
+        if (!data.user) throw new Error('Login failed');
+
+        const profile = await fetchProfile(data.user.id);
+        if (!profile) throw new Error('User profile not found');
+        if (activePortal === 'admin' && profile.role !== 'admin') {
+          throw new Error('Admin access restricted');
+        }
+
+        setUser({ id: profile.id, username: profile.username, role: profile.role });
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+
+        if (error) throw error;
+        if (!data.user) throw new Error('Registration failed');
+
+        const { error: profileError } = await supabase.from('profiles').insert({
+          id: data.user.id,
+          username,
+          email,
+          role,
+        });
+
+        if (profileError) throw profileError;
+
         alert('Registration successful! Use the login form to continue.');
         setAuthView('login');
-      } else {
-        setError(data.message || 'Authentication failed');
       }
-    } catch (err) {
-      setError('Connection error');
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed');
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     localStorage.removeItem('dept_booking_token');
     setUser(null);
     setActivePortal(null);
@@ -247,43 +264,44 @@ export default function App() {
             <form onSubmit={handleAuth} className="space-y-6">
               {error && <div className="p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded-lg text-sm font-bold mb-6 animate-pulse">{error}</div>}
               
+              {authView === 'register' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-600 uppercase tracking-widest ml-1">Username</label>
+                  <input 
+                    type="text" required value={username} onChange={e => setUsername(e.target.value)}
+                    className="w-full px-5 py-4 rounded-2xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all text-lg font-medium"
+                    placeholder="e.g. adams_admin"
+                  />
+                </div>
+              )}
+
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-600 uppercase tracking-widest ml-1">Username</label>
+                <label className="text-sm font-bold text-slate-600 uppercase tracking-widest ml-1">Email</label>
                 <input 
-                  type="text" required value={username} onChange={e => setUsername(e.target.value)}
+                  type="email" required value={email} onChange={e => setEmail(e.target.value)}
                   className="w-full px-5 py-4 rounded-2xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all text-lg font-medium"
-                  placeholder="e.g. adams_admin"
+                  placeholder="staff@university.edu"
                 />
               </div>
 
               {authView === 'register' && (
-                <>
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-600 uppercase tracking-widest ml-1">Email</label>
-                    <input 
-                        type="email" required value={email} onChange={e => setEmail(e.target.value)}
-                        className="w-full px-5 py-4 rounded-2xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all text-lg font-medium"
-                        placeholder="staff@university.edu"
-                    />
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-600 uppercase tracking-widest ml-1">Choose Role</label>
+                  <div className="grid grid-cols-2 gap-4">
+                      <button 
+                          type="button" onClick={() => setRole('student')}
+                          className={`px-5 py-3 rounded-2xl border-2 font-bold transition-all text-sm ${role === 'student' ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}
+                      >
+                          Student
+                      </button>
+                      <button 
+                          type="button" onClick={() => setRole('lecturer')}
+                          className={`px-5 py-3 rounded-2xl border-2 font-bold transition-all text-sm ${role === 'lecturer' ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}
+                      >
+                          Lecturer
+                      </button>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-600 uppercase tracking-widest ml-1">Choose Role</label>
-                    <div className="grid grid-cols-2 gap-4">
-                        <button 
-                            type="button" onClick={() => setRole('student')}
-                            className={`px-5 py-3 rounded-2xl border-2 font-bold transition-all text-sm ${role === 'student' ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}
-                        >
-                            Student
-                        </button>
-                        <button 
-                            type="button" onClick={() => setRole('lecturer')}
-                            className={`px-5 py-3 rounded-2xl border-2 font-bold transition-all text-sm ${role === 'lecturer' ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}
-                        >
-                            Lecturer
-                        </button>
-                    </div>
-                  </div>
-                </>
+                </div>
               )}
 
               <div className="space-y-2">
@@ -353,62 +371,137 @@ function Dashboard({ user, onLogout }: { user: UserInfo, onLogout: () => void })
 
   const fetchData = async () => {
     try {
-        const [resData, bookData, notifData] = await Promise.all([
-            fetchWithAuth('/resources'),
-            fetchWithAuth('/bookings'),
-            fetchWithAuth('/notifications')
-        ]);
-        setResources(resData);
-        setBookings(bookData);
-        setNotifications(notifData);
+      const [resData, bookData, notifData] = await Promise.all([
+        supabase.from<Resource>('resources').select('*').order('name'),
+        (async () => {
+          let query = supabase
+            .from('bookings')
+            .select('id, user_id, resource_id, start_time, end_time, status, purpose, created_at, resource:resources(name), requester:profiles(username)')
+            .order('created_at', { ascending: false });
+
+          if (user.role !== 'admin') {
+            query = query.eq('user_id', user.id);
+          }
+
+          return query;
+        })(),
+        supabase.from<Notification>('notifications').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+      ]);
+
+      if (resData.error) {
+        console.error(resData.error);
+      } else {
+        setResources(resData.data ?? []);
+      }
+
+      if (bookData.error) {
+        console.error(bookData.error);
+      } else {
+        setBookings((bookData.data ?? []).map((booking: any) => ({
+          ...booking,
+          resource_name: booking.resource?.name || '',
+          username: booking.requester?.username || '',
+        })));
+      }
+
+      if (notifData.error) {
+        console.error(notifData.error);
+      } else {
+        setNotifications(notifData.data ?? []);
+      }
     } catch (e) {
-        console.error("Data fetch error", e);
+      console.error('Data fetch error', e);
     }
   };
 
   const markAsRead = async (id: number) => {
-    await fetchWithAuth(`/notifications/${id}/read`, { method: 'PATCH' });
+    await supabase.from('notifications').update({ is_read: true }).eq('id', id).eq('user_id', user.id);
     fetchData();
   };
 
   const handleBooking = async (e: React.FormEvent) => {
     e.preventDefault();
     setBookingError('');
-    
+
     if (!selectedResource || !startTime || !endTime) return;
 
     if (new Date(startTime) >= new Date(endTime)) {
-        setBookingError('End time must be after start time');
-        return;
+      setBookingError('End time must be after start time');
+      return;
     }
 
-    const data = await fetchWithAuth('/bookings', {
-      method: 'POST',
-      body: JSON.stringify({
-        resource_id: selectedResource,
-        start_time: startTime.replace('T', ' '),
-        end_time: endTime.replace('T', ' '),
-        purpose
-      })
+    const { data: conflictData, error: conflictError } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('resource_id', selectedResource)
+      .in('status', ['approved', 'pending'])
+      .lt('start_time', endTime)
+      .gt('end_time', startTime)
+      .limit(1);
+
+    if (conflictError) {
+      setBookingError('Booking conflict check failed');
+      return;
+    }
+
+    if (conflictData && conflictData.length) {
+      setBookingError('Resource is already booked or requested for this time slot');
+      return;
+    }
+
+    const status = user.role === 'lecturer' ? 'approved' : 'pending';
+    const { error: insertError } = await supabase.from('bookings').insert({
+      user_id: user.id,
+      resource_id: selectedResource,
+      start_time: startTime.replace('T', ' '),
+      end_time: endTime.replace('T', ' '),
+      status,
+      purpose,
+      created_at: new Date().toISOString(),
     });
 
-    if (data.bookingId) {
-      alert(data.message);
-      setShowBookingModal(false);
-      fetchData();
-      // Reset
-      setStartTime(''); setEndTime(''); setPurpose('');
-    } else {
-      setBookingError(data.message || 'Overlap detected or server error');
+    if (insertError) {
+      setBookingError(insertError.message || 'Unable to create booking');
+      return;
     }
+
+    if (user.role === 'student') {
+      const { data: adminProfiles } = await supabase.from('profiles').select('id').eq('role', 'admin');
+      const resourceName = resources.find(r => r.id === selectedResource)?.name || 'resource';
+
+      if (adminProfiles?.length) {
+        const notifications = adminProfiles.map(admin => ({
+          user_id: admin.id,
+          title: 'New Booking Request',
+          message: `${user.username} requested ${resourceName} for ${startTime}.`,
+          type: 'booking_request',
+          is_read: false,
+          created_at: new Date().toISOString(),
+        }));
+
+        await supabase.from('notifications').insert(notifications);
+      }
+    }
+
+    alert('Booking submitted successfully');
+    setShowBookingModal(false);
+    fetchData();
+    setStartTime(''); setEndTime(''); setPurpose('');
   };
 
-  const updateBookingStatus = async (id: number, status: string, options: any = {}) => {
-    const data = await fetchWithAuth(`/bookings/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status, ...options })
-    });
-    if (data.message) fetchData();
+  const updateBookingStatus = async (id: number, status: string) => {
+    if (user.role !== 'admin' && status !== 'cancelled') {
+      setBookingError('You can only cancel your own bookings');
+      return;
+    }
+
+    const { error } = await supabase.from('bookings').update({ status }).eq('id', id);
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    fetchData();
   };
 
   const pendingCount = bookings.filter(b => b.status === 'pending').length;
